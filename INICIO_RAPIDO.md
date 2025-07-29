@@ -22,6 +22,7 @@ git config --global user.email "seuemail@exemplo.com"
 git init
 git add .
 git commit -m "Primeira versão do app"
+git branch -M main
 git remote add origin https://github.com/SEU-USUARIO/lista-compras-android.git
 git push -u origin main
 ```

@@ -570,7 +570,7 @@ class Example(MDApp):
             
         except Exception as e:
             logger.error(f"Erro ao atualizar lista de produtos: {e}")
-            self.mostrar_snackbar("Erro ao carregar produtos.")
+            self.mostrar_erro("Erro ao carregar produtos.")
             self.md_list.add_widget(item)
 
     # --- Tela de Supermercados ---
@@ -1069,18 +1069,182 @@ class Example(MDApp):
             self.mostrar_snackbar("Erro ao carregar produtos.")
 
     # --- Funções auxiliares melhoradas ---
-    def mostrar_snackbar(self, mensagem):
-        """Mostra snackbar com tratamento de erro"""
+    def mostrar_snackbar(self, mensagem, tipo="info", duracao=3):
+        """Mostra snackbar melhorado com diferentes tipos e cores"""
         try:
-            MDSnackbar(
+            # Definir cores por tipo de notificação
+            cores = {
+                "sucesso": [0.2, 0.7, 0.3, 1],    # Verde
+                "erro": [0.8, 0.2, 0.2, 1],       # Vermelho  
+                "aviso": [0.9, 0.6, 0.1, 1],      # Laranja
+                "info": [0.2, 0.4, 0.8, 1],       # Azul
+                "neutro": [0.3, 0.3, 0.3, 1]      # Cinza
+            }
+            
+            # Usar cor padrão se tipo não encontrado
+            cor = cores.get(tipo, cores["info"])
+            
+            snackbar = MDSnackbar(
                 MDSnackbarText(text=mensagem),
                 y=dp(24),
                 pos_hint={"center_x": 0.5},
-                size_hint_x=0.5,
-            ).open()
-            logger.info(f"Snackbar exibido: {mensagem}")
+                size_hint_x=0.9,
+                md_bg_color=cor,
+                auto_dismiss_timeout=duracao,
+            )
+            snackbar.open()
+            
+            logger.info(f"Snackbar {tipo} exibido: {mensagem}")
         except Exception as e:
             logger.error(f"Erro ao exibir snackbar: {e}")
+            # Fallback para snackbar simples
+            try:
+                MDSnackbar(
+                    MDSnackbarText(text=mensagem),
+                    y=dp(24),
+                    pos_hint={"center_x": 0.5},
+                    size_hint_x=0.5,
+                ).open()
+            except:
+                pass
+
+    def mostrar_sucesso(self, mensagem):
+        """Exibe notificação de sucesso"""
+        self.mostrar_snackbar(mensagem, "sucesso", 2)
+
+    def mostrar_erro(self, mensagem):
+        """Exibe notificação de erro"""
+        self.mostrar_snackbar(mensagem, "erro", 4)
+
+    def mostrar_aviso(self, mensagem):
+        """Exibe notificação de aviso"""
+        self.mostrar_snackbar(mensagem, "aviso", 3)
+
+    def mostrar_info(self, mensagem):
+        """Exibe notificação informativa"""
+        self.mostrar_snackbar(mensagem, "info", 2)
+
+    def mostrar_loading(self, mensagem="Carregando..."):
+        """Exibe indicador de carregamento"""
+        try:
+            if hasattr(self, 'snackbar_loading'):
+                self.snackbar_loading.dismiss()
+            
+            self.snackbar_loading = MDSnackbar(
+                MDSnackbarText(text=f"⏳ {mensagem}"),
+                y=dp(24),
+                pos_hint={"center_x": 0.5},
+                size_hint_x=0.9,
+                md_bg_color=[0.3, 0.3, 0.3, 1],
+                auto_dismiss_timeout=0,  # Não remove automaticamente
+            )
+            self.snackbar_loading.open()
+            logger.info(f"Loading mostrado: {mensagem}")
+        except Exception as e:
+            logger.error(f"Erro ao mostrar loading: {e}")
+
+    def ocultar_loading(self):
+        """Oculta indicador de carregamento"""
+        try:
+            if hasattr(self, 'snackbar_loading'):
+                self.snackbar_loading.dismiss()
+                delattr(self, 'snackbar_loading')
+        except Exception as e:
+            logger.error(f"Erro ao ocultar loading: {e}")
+
+    def navegacao_com_historico(self, tela_destino, titulo_tela=None):
+        """Navega para tela mantendo histórico de navegação"""
+        try:
+            # Inicializa histórico se não existir
+            if not hasattr(self, 'historico_navegacao'):
+                self.historico_navegacao = []
+            
+            # Adiciona tela atual ao histórico
+            tela_atual = self.screen_manager.current
+            if tela_atual != tela_destino:
+                self.historico_navegacao.append({
+                    'tela': tela_atual,
+                    'titulo': titulo_tela or tela_destino.title()
+                })
+            
+            # Limita histórico a 10 itens
+            if len(self.historico_navegacao) > 10:
+                self.historico_navegacao.pop(0)
+            
+            # Navega para destino
+            self.screen_manager.current = tela_destino
+            logger.info(f"Navegação: {tela_atual} → {tela_destino}")
+            
+        except Exception as e:
+            logger.error(f"Erro na navegação com histórico: {e}")
+            # Fallback para navegação simples
+            self.screen_manager.current = tela_destino
+
+    def voltar_navegacao_historico(self):
+        """Volta para tela anterior usando histórico"""
+        try:
+            if hasattr(self, 'historico_navegacao') and self.historico_navegacao:
+                tela_anterior = self.historico_navegacao.pop()
+                self.screen_manager.current = tela_anterior['tela']
+                logger.info(f"Voltou para: {tela_anterior['tela']}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao voltar no histórico: {e}")
+            return False
+
+    def validar_campo_obrigatorio(self, valor, nome_campo):
+        """Valida se campo obrigatório está preenchido"""
+        if not valor or not str(valor).strip():
+            self.mostrar_aviso(f"{nome_campo} é obrigatório!")
+            return False
+        return True
+
+    def validar_numero_positivo(self, valor, nome_campo):
+        """Valida se valor é um número positivo"""
+        try:
+            numero = float(str(valor).strip())
+            if numero <= 0:
+                self.mostrar_aviso(f"{nome_campo} deve ser maior que zero!")
+                return False
+            return numero
+        except ValueError:
+            self.mostrar_aviso(f"{nome_campo} deve ser um número válido!")
+            return False
+
+    def validar_data(self, data_str, formato="%Y-%m-%d"):
+        """Valida formato de data"""
+        try:
+            datetime.strptime(data_str, formato)
+            return True
+        except ValueError:
+            self.mostrar_aviso("Data deve estar no formato correto!")
+            return False
+
+    def validar_formulario_completo(self, campos_validacao):
+        """Valida múltiplos campos de uma vez
+        campos_validacao = [
+            ('nome', valor, 'obrigatorio'),
+            ('preco', valor, 'numero_positivo'),
+            ('data', valor, 'data')
+        ]
+        """
+        try:
+            for nome_campo, valor, tipo_validacao in campos_validacao:
+                if tipo_validacao == 'obrigatorio':
+                    if not self.validar_campo_obrigatorio(valor, nome_campo):
+                        return False
+                elif tipo_validacao == 'numero_positivo':
+                    if not self.validar_numero_positivo(valor, nome_campo):
+                        return False
+                elif tipo_validacao == 'data':
+                    if not self.validar_data(valor):
+                        return False
+            return True
+        except Exception as e:
+            logger.error(f"Erro na validação de formulário: {e}")
+            self.mostrar_erro("Erro na validação dos dados!")
+            return False
 
     def forcar_maiusculas(self, instance, text):
         """Força texto em maiúsculas nos campos - corrigido para aceitar 2 argumentos"""
@@ -2929,7 +3093,7 @@ class Example(MDApp):
             )
             
             if sucesso:
-                self.mostrar_snackbar("Item adicionado à lista com sucesso!")
+                self.mostrar_sucesso("Item adicionado à lista com sucesso!")
                 
                 # Volta para a tela de itens da lista
                 self.voltar_para_itens_lista_seguro()
@@ -3302,7 +3466,7 @@ class Example(MDApp):
                 )
             
             if sucesso:
-                self.mostrar_snackbar("Item editado com sucesso!")
+                self.mostrar_sucesso("Item editado com sucesso!")
                 
                 # Volta para a tela de itens da lista
                 self.voltar_para_itens_lista_seguro()
@@ -6649,7 +6813,7 @@ class Example(MDApp):
             self.fechar_popup_confirmacao()
             
             if sucesso:
-                self.mostrar_snackbar("Carrinho finalizado com sucesso!")
+                self.mostrar_sucesso("Carrinho finalizado com sucesso!")
                 # Recria a área de totais para mostrar botão de reabrir
                 self.area_totais_carrinho.clear_widgets()
                 self.criar_area_totais_carrinho()
@@ -6708,7 +6872,7 @@ class Example(MDApp):
             self.fechar_popup_confirmacao()
             
             if sucesso:
-                self.mostrar_snackbar("Carrinho reaberto com sucesso!")
+                self.mostrar_sucesso("Carrinho reaberto com sucesso!")
                 # Recria a área de totais para mostrar botão de finalizar
                 self.area_totais_carrinho.clear_widgets()
                 self.criar_area_totais_carrinho()
