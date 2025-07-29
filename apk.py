@@ -1829,222 +1829,630 @@ class Example(MDApp):
             logger.error(f"Erro no filtro em tempo real: {e}")
 
     def mostrar_sugestoes_produtos_nao_adicionados(self, filtro_texto):
-        """Mostra sugestões de tipos de produtos do banco que não estão na lista"""
+        """Mostra sugestões de tipos de produtos otimizada com cache e validação"""
         try:
             if not filtro_texto.strip():
                 return
                 
-            # Busca tipos de produtos que correspondem ao filtro
-            todos_tipos = listar_tipos_produto_apk()
-            filtro_norm = self.normalizar_texto(filtro_texto)
+            if not hasattr(self, 'lista_atual_visualizada_id'):
+                logger.warning("Nenhuma lista ativa para mostrar sugestões")
+                return
             
-            # Tipos que já estão na lista atual
-            itens_na_lista = listar_itens_lista_apk(self.lista_atual_visualizada_id)
-            tipos_na_lista = {item[1] for item in itens_na_lista}  # tipo_produto_id está no índice 1
-            
-            # Busca tipos que não estão na lista mas correspondem ao filtro
-            sugestoes = []
-            categorias_dict = {c[0]: c[1] for c in listar_categorias_apk()}
-            
-            for tipo in todos_tipos:
-                tipo_id = tipo[0]  # id do tipo
-                nome_tipo = tipo[1]  # nome do tipo
-                categoria_id = tipo[2]  # categoria_id do tipo
-                categoria_nome = categorias_dict.get(categoria_id, "")
-                
-                # Se tipo não está na lista e corresponde ao filtro
-                if (tipo_id not in tipos_na_lista and 
-                    (filtro_norm in self.normalizar_texto(str(nome_tipo)) or
-                     filtro_norm in self.normalizar_texto(str(categoria_nome)))):
-                    sugestoes.append(tipo)
-            
-            # Limita a 5 sugestões e ordena por relevância (nome primeiro)
-            sugestoes = sorted(sugestoes, key=lambda x: self.normalizar_texto(x[1]))[:5]
+            # Usa cache para otimizar performance
+            sugestoes = self.get_tipos_disponiveis_cached(
+                self.lista_atual_visualizada_id, 
+                filtro_texto
+            )
             
             # Adiciona seção de sugestões se houver
             if sugestoes:
-                self.adicionar_secao_sugestoes_tipos(sugestoes, categorias_dict)
+                categorias_dict = self.get_categorias_cached()
+                self.adicionar_secao_sugestoes_tipos_otimizada(sugestoes, categorias_dict)
                 logger.info(f"Exibindo {len(sugestoes)} sugestões de tipos para adicionar")
                 
         except Exception as e:
             logger.error(f"Erro ao buscar sugestões de tipos: {e}")
+            self.mostrar_erro("Erro ao buscar sugestões de produtos")
 
-    def adicionar_secao_sugestoes_tipos(self, sugestoes, categorias_dict):
-        """Adiciona seção de sugestões de tipos de produtos para adicionar à lista"""
+    def get_tipos_disponiveis_cached(self, lista_id, filtro_texto):
+        """Cache inteligente para tipos disponíveis com validação"""
         try:
-            # Separador visual antes das sugestões
-            separador = BoxLayout(size_hint_y=None, height=dp(8))
-            self.itens_list.add_widget(separador)
+            filtro_norm = self.normalizar_texto(filtro_texto)
+            cache_key = f"tipos_disponiveis_{lista_id}_{filtro_norm}"
             
-            # Label da seção de sugestões
-            sugestoes_label = MDLabel(
-                text=f"TIPOS DISPONÍVEIS PARA ADICIONAR ({len(sugestoes)})",
-                theme_text_color="Secondary",
-                size_hint_y=None,
-                height=dp(28),  # Menor que categoria normal
-                padding=(dp(16), dp(2)),
-                bold=True,
-            )
-            self.itens_list.add_widget(sugestoes_label)
+            # Verifica cache (válido por 2 minutos)
+            if (cache_key in self._cache_produtos and 
+                time.time() - self._cache_timestamp.get(cache_key, 0) < 120):
+                logger.info(f"Usando cache para tipos disponíveis: {cache_key}")
+                return self._cache_produtos[cache_key]
             
-            # Adiciona cada sugestão com botão de +
-            for tipo in sugestoes:
+            # Processa tipos disponíveis
+            sugestoes = self._processar_tipos_disponiveis(lista_id, filtro_texto)
+            
+            # Armazena no cache
+            self._cache_produtos[cache_key] = sugestoes
+            self._cache_timestamp[cache_key] = time.time()
+            
+            logger.info(f"Cache atualizado para tipos disponíveis: {len(sugestoes)} items")
+            return sugestoes
+            
+        except Exception as e:
+            logger.error(f"Erro no cache de tipos disponíveis: {e}")
+            return []
+
+    def _processar_tipos_disponiveis(self, lista_id, filtro_texto):
+        """Processa tipos disponíveis com lógica otimizada"""
+        try:
+            # Busca dados necessários
+            todos_tipos = listar_tipos_produto_apk()
+            if not todos_tipos:
+                return []
+            
+            itens_na_lista = listar_itens_lista_apk(lista_id)
+            tipos_na_lista = {item[1] for item in itens_na_lista}  # tipo_produto_id está no índice 1
+            
+            categorias_dict = self.get_categorias_cached()
+            filtro_norm = self.normalizar_texto(filtro_texto)
+            
+            # Filtra tipos disponíveis
+            sugestoes = []
+            for tipo in todos_tipos:
+                if len(tipo) < 3:  # Validação de estrutura
+                    continue
+                    
                 tipo_id = tipo[0]
                 nome_tipo = tipo[1]
                 categoria_id = tipo[2]
-                categoria_nome = categorias_dict.get(categoria_id, "")
                 
-                # Botão de adicionar (+)
-                btn_adicionar = MDActionTopAppBarButton(
-                    icon="plus-circle",
-                    theme_icon_color="Custom",
-                    icon_color="green",
-                    on_release=lambda x, tid=tipo_id: self.adicionar_tipo_sugerido_lista(tid)
-                )
+                # Se tipo não está na lista
+                if tipo_id not in tipos_na_lista:
+                    categoria_nome = categorias_dict.get(categoria_id, "")
+                    
+                    # Verifica se corresponde ao filtro
+                    if (filtro_norm in self.normalizar_texto(str(nome_tipo)) or
+                        filtro_norm in self.normalizar_texto(str(categoria_nome))):
+                        sugestoes.append(tipo)
+                        
+                    # Limita processamento para performance
+                    if len(sugestoes) >= 10:  # Processa até 10, mostra apenas 5
+                        break
+            
+            # Ordena por relevância e limita
+            sugestoes.sort(key=lambda x: self.normalizar_texto(x[1]))
+            return sugestoes[:5]
+            
+        except Exception as e:
+            logger.error(f"Erro ao processar tipos disponíveis: {e}")
+            return []
+
+    def get_categorias_cached(self):
+        """Cache para categorias com timeout de 5 minutos"""
+        try:
+            cache_key = "categorias"
+            current_time = time.time()
+            
+            if (cache_key in self._cache_produtos and 
+                current_time - self._cache_timestamp.get(cache_key, 0) < 300):
+                return self._cache_produtos[cache_key]
+            
+            categorias = listar_categorias_apk()
+            categorias_dict = {c[0]: c[1] for c in categorias}
+            
+            self._cache_produtos[cache_key] = categorias_dict
+            self._cache_timestamp[cache_key] = current_time
+            
+            return categorias_dict
+            
+        except Exception as e:
+            logger.error(f"Erro no cache de categorias: {e}")
+            return {}
+
+    def adicionar_secao_sugestoes_tipos_otimizada(self, sugestoes, categorias_dict):
+        """Adiciona seção otimizada de sugestões com melhor UI"""
+        try:
+            # Separador visual mais elegante
+            separador = BoxLayout(
+                size_hint_y=None, 
+                height=dp(12),
+                md_bg_color=[0.9, 0.9, 0.9, 0.3]  # Cor sutil
+            )
+            self.itens_list.add_widget(separador)
+            
+            # Label da seção com melhor visual
+            sugestoes_label = MDLabel(
+                text=f"💡 TIPOS DISPONÍVEIS PARA ADICIONAR ({len(sugestoes)})",
+                theme_text_color="Secondary",
+                size_hint_y=None,
+                height=dp(32),
+                padding=(dp(16), dp(4)),
+                bold=True,
+                font_style="Caption"
+            )
+            self.itens_list.add_widget(sugestoes_label)
+            
+            # Adiciona cada sugestão com informações completas
+            for tipo in sugestoes:
+                self.adicionar_item_sugestao_otimizado(tipo, categorias_dict)
                 
-                # Item da sugestão com altura menor
-                item_sugestao = MDListItem(
-                    btn_adicionar,
-                    MDListItemHeadlineText(text=str(nome_tipo).upper()),
-                    MDListItemSupportingText(
-                        text=f"Categoria: {str(categoria_nome).upper()}"
-                    ),
-                    padding=(dp(4), dp(2), dp(4), dp(2)),  # Padding ainda menor
-                    size_hint_y=None,
-                    height=dp(48),  # Altura menor que itens normais
-                )
-                self.itens_list.add_widget(item_sugestao)
+            logger.info(f"Seção de sugestões adicionada com {len(sugestoes)} tipos")
                 
         except Exception as e:
-            logger.error(f"Erro ao adicionar seção de sugestões de tipos: {e}")
+            logger.error(f"Erro ao adicionar seção de sugestões: {e}")
 
-    def adicionar_tipo_sugerido_lista(self, tipo_id):
-        """Adiciona tipo sugerido à lista atual"""
+    def adicionar_item_sugestao_otimizado(self, tipo, categorias_dict):
+        """Adiciona item de sugestão com informações completas e validação"""
         try:
-            if not hasattr(self, 'lista_atual_visualizada_id'):
+            if len(tipo) < 3:
+                logger.warning(f"Tipo com estrutura inválida: {tipo}")
                 return
                 
-            # Abre dialog para definir quantidade
+            tipo_id = tipo[0]
+            nome_tipo = tipo[1]
+            categoria_id = tipo[2]
+            categoria_nome = categorias_dict.get(categoria_id, "Categoria não encontrada")
+            
+            # Botão de adicionar melhorado
+            btn_adicionar = MDActionTopAppBarButton(
+                icon="plus-circle",
+                theme_icon_color="Custom",
+                icon_color=[0.2, 0.7, 0.2, 1],  # Verde mais suave
+                on_release=lambda x, tid=tipo_id: self.adicionar_tipo_sugerido_otimizado(tid)
+            )
+            
+            # Informações mais completas do tipo
+            headline_text = f"✨ {str(nome_tipo).upper()}"
+            supporting_text = f"📂 {str(categoria_nome).upper()}"
+            
+            # Adiciona informação extra se disponível
+            if len(tipo) > 3 and tipo[3]:  # Se tem subcategoria
+                try:
+                    subcategorias_dict = self.get_subcategorias_cached()
+                    subcategoria_nome = subcategorias_dict.get(tipo[3], "")
+                    if subcategoria_nome:
+                        supporting_text += f" | 📁 {str(subcategoria_nome).upper()}"
+                except Exception as e:
+                    logger.debug(f"Erro ao buscar subcategoria: {e}")
+            
+            # Item da sugestão com visual melhorado
+            item_sugestao = MDListItem(
+                btn_adicionar,
+                MDListItemHeadlineText(text=headline_text),
+                MDListItemSupportingText(text=supporting_text),
+                padding=(dp(8), dp(2), dp(8), dp(2)),
+                size_hint_y=None,
+                height=dp(52),
+                md_bg_color=[0.98, 0.98, 1, 0.5]  # Fundo levemente azulado
+            )
+            self.itens_list.add_widget(item_sugestao)
+            
+        except Exception as e:
+            logger.error(f"Erro ao adicionar item de sugestão {tipo}: {e}")
+
+    def get_subcategorias_cached(self):
+        """Cache para subcategorias"""
+        try:
+            cache_key = "subcategorias"
+            current_time = time.time()
+            
+            if (cache_key in self._cache_produtos and 
+                current_time - self._cache_timestamp.get(cache_key, 0) < 300):
+                return self._cache_produtos[cache_key]
+            
+            # Busca todas as subcategorias
+            subcategorias_dict = {}
+            categorias = listar_categorias_apk()
+            
+            for categoria in categorias:
+                subcats = listar_subcategorias_apk(categoria[0])
+                for subcat in subcats:
+                    subcategorias_dict[subcat[0]] = subcat[1]
+            
+            self._cache_produtos[cache_key] = subcategorias_dict
+            self._cache_timestamp[cache_key] = current_time
+            
+            return subcategorias_dict
+            
+        except Exception as e:
+            logger.error(f"Erro no cache de subcategorias: {e}")
+            return {}
+
+    def adicionar_tipo_sugerido_otimizado(self, tipo_id):
+        """Versão otimizada para adicionar tipo sugerido com validação completa"""
+        try:
+            if not hasattr(self, 'lista_atual_visualizada_id'):
+                self.mostrar_erro("Nenhuma lista ativa selecionada")
+                return
+                
+            # Validação prévia robusta
+            valido, mensagem = self.validar_tipo_para_adicao(
+                self.lista_atual_visualizada_id, 
+                tipo_id
+            )
+            
+            if not valido:
+                self.mostrar_aviso(mensagem)
+                return
+            
+            # Salva o tipo selecionado
             self.tipo_sugerido_id = tipo_id
-            self.show_dialog_quantidade_tipo_sugerido()
+            
+            # Mostra dialog melhorado para quantidade
+            self.show_dialog_quantidade_otimizado()
                 
         except Exception as e:
             logger.error(f"Erro ao adicionar tipo sugerido {tipo_id}: {e}")
-            self.mostrar_snackbar("Erro ao adicionar tipo.")
+            self.mostrar_erro("Erro interno ao processar tipo selecionado")
 
-    def show_dialog_quantidade_tipo_sugerido(self):
-        """Mostra dialog para definir quantidade do tipo sugerido"""
+    def validar_tipo_para_adicao(self, lista_id, tipo_id):
+        """Validação completa antes de adicionar tipo à lista"""
         try:
-            # Busca nome do tipo
-            tipos = listar_tipos_produto_apk()
-            tipo = next((t for t in tipos if t[0] == self.tipo_sugerido_id), None)
-            nome_tipo = tipo[1] if tipo else "Tipo"
+            # Verifica se lista existe
+            if not self.lista_existe(lista_id):
+                return False, "Lista não encontrada ou foi removida"
             
-            # Campo de quantidade
+            # Verifica se tipo existe
+            tipo_info = self.get_tipo_info_completa(tipo_id)
+            if not tipo_info:
+                return False, "Tipo de produto não encontrado"
+            
+            # Verifica se tipo já está na lista
+            if self.tipo_ja_na_lista(lista_id, tipo_id):
+                return False, "Este tipo de produto já está na lista"
+            
+            # Verifica se categoria/subcategoria do tipo existem
+            categoria_id = tipo_info.get('categoria_id')
+            subcategoria_id = tipo_info.get('subcategoria_id')
+            
+            if not categoria_id:
+                return False, "Tipo sem categoria definida"
+                
+            if not self.categoria_existe(categoria_id):
+                return False, "Categoria do tipo não encontrada"
+            
+            # Subcategoria é opcional, mas se definida deve existir
+            if subcategoria_id and not self.subcategoria_existe(subcategoria_id):
+                return False, "Subcategoria do tipo não encontrada"
+            
+            return True, "Validação concluída com sucesso"
+            
+        except Exception as e:
+            logger.error(f"Erro na validação do tipo {tipo_id}: {e}")
+            return False, "Erro interno na validação"
+
+    def lista_existe(self, lista_id):
+        """Verifica se lista existe no banco"""
+        try:
+            listas = listar_listas_apk()
+            return any(lista[0] == lista_id for lista in listas)
+        except Exception as e:
+            logger.error(f"Erro ao verificar existência da lista {lista_id}: {e}")
+            return False
+
+    def get_tipo_info_completa(self, tipo_id):
+        """Busca informações completas do tipo com cache"""
+        try:
+            cache_key = f"tipo_info_{tipo_id}"
+            current_time = time.time()
+            
+            # Cache válido por 5 minutos
+            if (cache_key in self._cache_produtos and 
+                current_time - self._cache_timestamp.get(cache_key, 0) < 300):
+                return self._cache_produtos[cache_key]
+            
+            tipos = listar_tipos_produto_apk()
+            tipo = next((t for t in tipos if t[0] == tipo_id), None)
+            
+            if not tipo or len(tipo) < 3:
+                return None
+                
+            tipo_info = {
+                'id': tipo[0],
+                'nome': tipo[1],
+                'categoria_id': tipo[2],
+                'subcategoria_id': tipo[3] if len(tipo) > 3 else None
+            }
+            
+            # Armazena no cache
+            self._cache_produtos[cache_key] = tipo_info
+            self._cache_timestamp[cache_key] = current_time
+            
+            return tipo_info
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar info do tipo {tipo_id}: {e}")
+            return None
+
+    def tipo_ja_na_lista(self, lista_id, tipo_id):
+        """Verifica se tipo já está na lista"""
+        try:
+            itens = listar_itens_lista_apk(lista_id)
+            return any(item[1] == tipo_id for item in itens)  # tipo_id está no índice 1
+        except Exception as e:
+            logger.error(f"Erro ao verificar tipo na lista: {e}")
+            return False
+
+    def categoria_existe(self, categoria_id):
+        """Verifica se categoria existe"""
+        try:
+            categorias_dict = self.get_categorias_cached()
+            return categoria_id in categorias_dict
+        except Exception as e:
+            logger.error(f"Erro ao verificar categoria {categoria_id}: {e}")
+            return False
+
+    def subcategoria_existe(self, subcategoria_id):
+        """Verifica se subcategoria existe"""
+        try:
+            subcategorias_dict = self.get_subcategorias_cached()
+            return subcategoria_id in subcategorias_dict
+        except Exception as e:
+            logger.error(f"Erro ao verificar subcategoria {subcategoria_id}: {e}")
+            return False
+
+    def show_dialog_quantidade_otimizado(self):
+        """Dialog otimizado para quantidade com informações completas"""
+        try:
+            # Busca informações completas do tipo
+            tipo_info = self.get_tipo_info_completa(self.tipo_sugerido_id)
+            if not tipo_info:
+                self.mostrar_erro("Erro ao carregar informações do tipo")
+                return
+            
+            nome_tipo = tipo_info['nome']
+            categoria_id = tipo_info['categoria_id']
+            subcategoria_id = tipo_info.get('subcategoria_id')
+            
+            # Busca nomes das categorias
+            categorias_dict = self.get_categorias_cached()
+            subcategorias_dict = self.get_subcategorias_cached()
+            
+            categoria_nome = categorias_dict.get(categoria_id, "Categoria não encontrada")
+            subcategoria_nome = ""
+            if subcategoria_id:
+                subcategoria_nome = subcategorias_dict.get(subcategoria_id, "")
+            
+            # Campo de quantidade melhorado
             self.campo_quantidade_sugerido = MDTextField(
-                hint_text="Quantidade",
+                hint_text="Quantidade (ex: 2)",
                 text="1",
                 multiline=False,
                 size_hint_y=None,
                 height=dp(56),
-                input_filter="int"  # Apenas números inteiros
+                input_filter="int",
+                helper_text="Digite apenas números positivos",
+                helper_text_mode="persistent",
+                on_text_validate=self.confirmar_adicao_tipo_sugerido_otimizado
             )
             
-            # Card container
+            # Card container melhorado
             card = MDCard(
                 orientation="vertical",
-                padding=dp(16),
+                padding=dp(20),
                 spacing=dp(16),
                 size_hint_y=None,
-                height=dp(200),
-                elevation=0,
+                height=dp(280),
+                elevation=3,
+                radius=[10, 10, 10, 10]
             )
             
-            # Título
+            # Título com informações do tipo
             titulo = MDLabel(
-                text=f"Adicionar '{str(nome_tipo).upper()}' à lista:",
+                text=f"📦 Adicionar à Lista",
                 theme_text_color="Primary",
                 size_hint_y=None,
                 height=dp(32),
-                halign="center"
+                halign="center",
+                font_style="H6",
+                bold=True
             )
             
-            # Botões
+            # Informações do tipo
+            info_tipo = MDLabel(
+                text=f"🏷️ {str(nome_tipo).upper()}",
+                theme_text_color="Secondary",
+                size_hint_y=None,
+                height=dp(28),
+                halign="center",
+                font_style="Subtitle1"
+            )
+            
+            # Categoria e subcategoria
+            categoria_texto = f"📂 {str(categoria_nome).upper()}"
+            if subcategoria_nome:
+                categoria_texto += f"\n📁 {str(subcategoria_nome).upper()}"
+                
+            info_categoria = MDLabel(
+                text=categoria_texto,
+                theme_text_color="Hint",
+                size_hint_y=None,
+                height=dp(48) if subcategoria_nome else dp(24),
+                halign="center",
+                font_style="Caption"
+            )
+            
+            # Botões melhorados
             botoes_box = BoxLayout(
                 orientation="horizontal",
                 spacing=dp(16),
                 size_hint_y=None,
-                height=dp(40),
+                height=dp(48),
             )
             
             btn_cancelar = MDButton(
-                MDButtonText(text="CANCELAR"),
+                MDButtonText(text="✕ CANCELAR"),
                 style="text",
+                theme_bg_color="Custom",
+                md_bg_color=[0.8, 0.2, 0.2, 0.1],
                 on_release=self.fechar_bottomsheet_quantidade,
                 size_hint_x=0.5,
             )
             
             btn_adicionar = MDButton(
-                MDButtonText(text="ADICIONAR"),
-                style="filled",  
-                on_release=self.confirmar_adicao_tipo_sugerido,
+                MDButtonText(text="✓ ADICIONAR"),
+                style="filled",
+                theme_bg_color="Custom", 
+                md_bg_color=[0.2, 0.7, 0.3, 1],
+                on_release=self.confirmar_adicao_tipo_sugerido_otimizado,
                 size_hint_x=0.5,
             )
             
             botoes_box.add_widget(btn_cancelar)
             botoes_box.add_widget(btn_adicionar)
             
+            # Monta o card
             card.add_widget(titulo)
+            card.add_widget(info_tipo)
+            card.add_widget(info_categoria)
             card.add_widget(self.campo_quantidade_sugerido)
             card.add_widget(botoes_box)
             
+            # BottomSheet otimizado
             self.bottomsheet_quantidade = MDBottomSheet()
             self.bottomsheet_quantidade.add_widget(card)
             self.bottomsheet_quantidade.set_state("open")
             
+            # Foca no campo de quantidade
+            Clock.schedule_once(lambda dt: self.campo_quantidade_sugerido.focus(), 0.1)
+            
+            logger.info(f"Dialog de quantidade aberto para tipo: {nome_tipo}")
+            
         except Exception as e:
-            logger.error(f"Erro ao mostrar dialog de quantidade: {e}")
-            self.mostrar_snackbar("Erro ao abrir dialog.")
+            logger.error(f"Erro ao mostrar dialog de quantidade otimizado: {e}")
+            self.mostrar_erro("Erro ao abrir dialog de quantidade")
 
     def fechar_bottomsheet_quantidade(self, *args):
-        """Fecha bottomsheet de quantidade"""
+        """Fecha bottomsheet de quantidade com limpeza"""
         try:
-            self.bottomsheet_quantidade.set_state("close")
+            if hasattr(self, 'bottomsheet_quantidade'):
+                self.bottomsheet_quantidade.set_state("close")
+                
+                # Limpa referências para evitar memory leaks
+                Clock.schedule_once(lambda dt: self.limpar_refs_bottomsheet(), 0.5)
+                
+            logger.info("BottomSheet de quantidade fechado")
         except Exception as e:
             logger.error(f"Erro ao fechar bottomsheet: {e}")
 
-    def confirmar_adicao_tipo_sugerido(self, *args):
-        """Confirma adição do tipo sugerido com quantidade"""
+    def limpar_refs_bottomsheet(self):
+        """Limpa referências do bottomsheet para evitar memory leaks"""
         try:
+            if hasattr(self, 'bottomsheet_quantidade'):
+                delattr(self, 'bottomsheet_quantidade')
+            if hasattr(self, 'campo_quantidade_sugerido'):
+                delattr(self, 'campo_quantidade_sugerido')
+            if hasattr(self, 'tipo_sugerido_id'):
+                delattr(self, 'tipo_sugerido_id')
+        except Exception as e:
+            logger.debug(f"Erro ao limpar referências do bottomsheet: {e}")
+
+    def confirmar_adicao_tipo_sugerido_otimizado(self, *args):
+        """Confirma adição com transação atômica e validação robusta"""
+        try:
+            # Validação de quantidade
             quantidade_text = self.campo_quantidade_sugerido.text.strip()
-            if not quantidade_text or not quantidade_text.isdigit():
-                self.mostrar_snackbar("Digite uma quantidade válida.")
+            if not self.validar_quantidade_input(quantidade_text):
                 return
+            
+            quantidade = int(quantidade_text)
+            
+            # Inicia loading
+            self.mostrar_loading("Adicionando tipo à lista...")
+            
+            # Validação final antes da operação
+            valido, mensagem = self.validar_tipo_para_adicao(
+                self.lista_atual_visualizada_id, 
+                self.tipo_sugerido_id
+            )
+            
+            if not valido:
+                self.ocultar_loading()
+                self.mostrar_erro(f"Validação falhou: {mensagem}")
+                return
+            
+            # Executa transação atômica
+            sucesso = self.executar_adicao_tipo_atomica(quantidade)
+            
+            if sucesso:
+                # Fecha dialog
+                self.fechar_bottomsheet_quantidade()
+                
+                # Atualização otimizada da interface
+                self.atualizar_lista_apos_adicao()
+                
+                # Feedback de sucesso
+                tipo_info = self.get_tipo_info_completa(self.tipo_sugerido_id)
+                nome_tipo = tipo_info['nome'] if tipo_info else "Tipo"
+                self.mostrar_sucesso(f"'{nome_tipo}' adicionado com sucesso! (Qtd: {quantidade})")
+                
+                logger.info(f"Tipo {self.tipo_sugerido_id} adicionado com quantidade {quantidade}")
+            else:
+                self.mostrar_erro("Falha ao adicionar tipo à lista")
+                
+        except Exception as e:
+            logger.error(f"Erro ao confirmar adição do tipo: {e}")
+            self.mostrar_erro("Erro inesperado ao adicionar tipo")
+        finally:
+            self.ocultar_loading()
+
+    def validar_quantidade_input(self, quantidade_text):
+        """Valida entrada de quantidade com feedback específico"""
+        try:
+            if not quantidade_text:
+                self.mostrar_aviso("Por favor, digite uma quantidade")
+                self.campo_quantidade_sugerido.focus()
+                return False
+                
+            if not quantidade_text.isdigit():
+                self.mostrar_aviso("Quantidade deve conter apenas números")
+                self.campo_quantidade_sugerido.focus()
+                self.campo_quantidade_sugerido.select_all()
+                return False
                 
             quantidade = int(quantidade_text)
             if quantidade <= 0:
-                self.mostrar_snackbar("Quantidade deve ser maior que zero.")
-                return
+                self.mostrar_aviso("Quantidade deve ser maior que zero")
+                self.campo_quantidade_sugerido.focus()
+                self.campo_quantidade_sugerido.select_all()
+                return False
+                
+            if quantidade > 999:
+                self.mostrar_aviso("Quantidade máxima é 999")
+                self.campo_quantidade_sugerido.focus()
+                self.campo_quantidade_sugerido.select_all()
+                return False
+                
+            return True
             
-            # Busca categoria e subcategoria do tipo para adicionar corretamente
-            tipos = listar_tipos_produto_apk()
-            tipo_info = next((t for t in tipos if t[0] == self.tipo_sugerido_id), None)
-            
+        except Exception as e:
+            logger.error(f"Erro na validação de quantidade: {e}")
+            self.mostrar_erro("Erro na validação da quantidade")
+            return False
+
+    def executar_adicao_tipo_atomica(self, quantidade):
+        """Executa adição com transação atômica"""
+        try:
+            # Busca informações completas do tipo
+            tipo_info = self.get_tipo_info_completa(self.tipo_sugerido_id)
             if not tipo_info:
-                self.mostrar_snackbar("Tipo de produto não encontrado.")
-                return
+                logger.error(f"Tipo {self.tipo_sugerido_id} não encontrado para adição")
+                return False
             
-            categoria_id = tipo_info[2] if len(tipo_info) > 2 else None
-            subcategoria_id = tipo_info[3] if len(tipo_info) > 3 else None
+            categoria_id = tipo_info['categoria_id']
+            subcategoria_id = tipo_info.get('subcategoria_id')
             
-            if not categoria_id or not subcategoria_id:
-                self.mostrar_snackbar("Categoria ou subcategoria do tipo não encontrada.")
-                return
+            # Verifica novamente se categoria/subcategoria existem
+            if not self.categoria_existe(categoria_id):
+                logger.error(f"Categoria {categoria_id} não existe")
+                return False
+                
+            if subcategoria_id and not self.subcategoria_existe(subcategoria_id):
+                logger.error(f"Subcategoria {subcategoria_id} não existe")
+                return False
             
-            # Data atual para o item
+            # Data da adição
             data_adicao = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # Adiciona item à lista com todos os parâmetros necessários
+            # Operação atômica no banco
             sucesso = adicionar_item_lista_apk(
                 self.lista_atual_visualizada_id,
                 self.tipo_sugerido_id,
@@ -2055,20 +2463,58 @@ class Example(MDApp):
             )
             
             if sucesso:
-                self.bottomsheet_quantidade.set_state("close")
-                # Reaplica o filtro para atualizar a lista
-                filtro_texto = self.filtro_texto_itens_lista.text.strip()
-                self.atualizar_lista_compras_itens(self.lista_atual_visualizada_id, filtro_texto)
-                # Atualiza o título da AppBar com novo total
-                self.atualizar_titulo_appbar_lista()
-                self.mostrar_snackbar("Tipo adicionado com sucesso!")
-                logger.info(f"Tipo {self.tipo_sugerido_id} adicionado à lista com quantidade {quantidade}")
+                # Invalida caches relacionados
+                self.invalidar_cache_lista_especifica(self.lista_atual_visualizada_id)
+                return True
             else:
-                self.mostrar_snackbar("Erro ao adicionar tipo à lista.")
+                logger.error("Falha na operação do banco de dados")
+                return False
                 
         except Exception as e:
-            logger.error(f"Erro ao confirmar adição do tipo: {e}")
-            self.mostrar_snackbar("Erro ao adicionar tipo.")
+            logger.error(f"Erro na transação atômica: {e}")
+            return False
+
+    def invalidar_cache_lista_especifica(self, lista_id):
+        """Invalida caches específicos da lista"""
+        try:
+            # Invalida cache de tipos disponíveis para esta lista
+            keys_to_remove = []
+            for key in self._cache_produtos.keys():
+                if f"tipos_disponiveis_{lista_id}" in key:
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                self._cache_produtos.pop(key, None)
+                self._cache_timestamp.pop(key, None)
+            
+            logger.info(f"Cache invalidado para lista {lista_id}: {len(keys_to_remove)} entradas")
+            
+        except Exception as e:
+            logger.error(f"Erro ao invalidar cache da lista: {e}")
+
+    def atualizar_lista_apos_adicao(self):
+        """Atualização otimizada da lista após adição"""
+        try:
+            # Reaplica filtro atual para atualizar interface
+            filtro_texto = ""
+            if hasattr(self, 'filtro_texto_itens_lista'):
+                filtro_texto = self.filtro_texto_itens_lista.text.strip()
+            
+            # Atualiza lista com filtro atual
+            self.atualizar_lista_compras_itens(self.lista_atual_visualizada_id, filtro_texto)
+            
+            # Atualiza título com novo total
+            self.atualizar_titulo_appbar_lista()
+            
+            logger.info("Interface atualizada após adição do tipo")
+            
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lista após adição: {e}")
+            # Fallback para atualização completa
+            try:
+                self.atualizar_lista_compras_itens(self.lista_atual_visualizada_id)
+            except Exception as e2:
+                logger.error(f"Erro no fallback de atualização: {e2}")
 
     def atualizar_titulo_appbar_lista(self):
         """Atualiza o título da AppBar com o total de itens da lista"""
